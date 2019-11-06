@@ -89,19 +89,29 @@ def main():
     num_styles = len(style_image_input)
     style_seg_images_caffe, content_seg_images_caffe = [], []
     content_masks, style_masks = [], []
-    if params.content_seg != None and params.style_seg != None:
+    if params.content_seg != None:
         content_seg_list = params.content_seg.split(",")
         assert(len(content_seg_list) == len(style_image_list), \
             "-content_seg and -style_image must have the same number of elements")
         for image in content_seg_list:
             content_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
             content_seg_images_caffe.append(content_seg_caffe)
-        style_seg_list = params.style_seg.split(",")
-        assert(len(style_seg_list) == len(style_image_list), \
-            "-style_seg and -style_image must have the same number of elements")
-        for image in style_seg_list:
-            style_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
-            style_seg_images_caffe.append(style_seg_caffe)
+
+        if params.style_seg == None:  
+            # no style_seg specified, so just default to white
+            for i in range(num_styles):
+                print('the size is ', style_images_caffe[i].shape)
+                style_seg_caffe = torch.ones(style_images_caffe[i].shape).type(dtype)
+                print("we created ones",style_seg_caffe.shape)
+                style_seg_images_caffe.append(style_seg_caffe)
+        else:
+            style_seg_list = params.style_seg.split(",")
+            assert(len(style_seg_list) == len(style_image_list), \
+                "-style_seg and -style_image must have the same number of elements")
+            for image in style_seg_list:
+                style_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
+                print("we created actual",style_seg_caffe.shape)
+                style_seg_images_caffe.append(style_seg_caffe)
         for j in range(num_styles):
             content_mask_j = content_seg_images_caffe[j][0][0].type(dtype)
             content_masks.append(content_mask_j)
@@ -153,7 +163,7 @@ def main():
 
     for i, layer in enumerate(list(cnn), 1):
         if next_content_idx <= len(content_layers) or next_style_idx <= len(style_layers):
-            if params.content_seg != None and params.style_seg != None:
+            if params.content_seg != None:
 
                 if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
                     for k in range(num_styles):
