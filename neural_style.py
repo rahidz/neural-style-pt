@@ -10,14 +10,13 @@ from CaffeLoader import loadCaffemodel, ModelParallel
 
 import argparse
 parser = argparse.ArgumentParser()
-# Basic options
 
+# Basic options
 parser.add_argument("-style_image", help="Style target image", default='examples/inputs/starry_night.jpg')
 parser.add_argument("-style_seg", help="Style segmentation images", default=None)
 parser.add_argument("-style_blend_weights", default=None)
 parser.add_argument("-content_image", help="Content target image", default='examples/inputs/monalisa.jpg')
 parser.add_argument("-content_seg", help="Content segmentation image", default=None)
-parser.add_argument("-color_codes", help="Colors used in content mask (blue,green,black,white,red,yellow,grey,lightblue,purple)", default=None)
 parser.add_argument("-image_size", help="Maximum height / width of generated image", type=int, default=512)
 parser.add_argument("-gpu", help="Zero-indexed ID of the GPU to use; for CPU mode set -gpu = c", default=0)
 
@@ -58,6 +57,9 @@ params = parser.parse_args()
 Image.MAX_IMAGE_PIXELS = 1000000000 # Support gigapixel images
 
 
+#import numpy as np
+#from PIL import Image
+
 def main():
     dtype, multidevice, backward_device = setup_gpu()
 
@@ -84,26 +86,35 @@ def main():
         init_image = preprocess(params.init_image, image_size).type(dtype)
 
     # setup segmentation masks
-    style_seg_images_caffe = []
-    color_content_masks, color_style_masks, color_codes = [], [], []
-    if params.content_seg != None and params.style_seg != None and params.color_codes != None:
-        color_codes = params.color_codes.split(",")
-        content_seg_caffe = preprocess(params.content_seg, params.image_size, to_normalize=False).type(dtype)
+    num_styles = len(style_image_input)
+    style_seg_images_caffe, content_seg_images_caffe = [], []
+    content_masks, style_masks = [], []
+    if params.content_seg != None and params.style_seg != None:
+        content_seg_list = params.content_seg.split(",")
+        assert(len(content_seg_list) == len(style_image_list), \
+            "-content_seg and -style_image must have the same number of elements")
+        for image in content_seg_list:
+            content_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
+            content_seg_images_caffe.append(content_seg_caffe)
         style_seg_list = params.style_seg.split(",")
         assert(len(style_seg_list) == len(style_image_list), \
             "-style_seg and -style_image must have the same number of elements")
         for image in style_seg_list:
             style_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
             style_seg_images_caffe.append(style_seg_caffe)
-        for j in range(len(color_codes)):
-            content_mask_j = ExtractMask(content_seg_caffe[0], color_codes[j], dtype)
-            color_content_masks.append(content_mask_j)
-        for i in range(len(style_image_list)):
+        for j in range(num_styles):
+            content_mask_j = content_seg_images_caffe[j][0][0].type(dtype)
+            content_masks.append(content_mask_j)
+        for i in range(num_styles):
             tmp_table = []
-            for j in range(len(color_codes)):
-                style_mask_i_j = ExtractMask(style_seg_images_caffe[i][0], color_codes[j], dtype)
+            for j in range(num_styles):
+                style_seg_image_caffe = style_seg_images_caffe[i][0][0]
+                if i == j:
+                    style_mask_i_j = style_seg_image_caffe.type(dtype)
+                else:                
+                    style_mask_i_j = torch.zeros(style_seg_image_caffe.shape).type(dtype)
                 tmp_table.append(style_mask_i_j)
-            color_style_masks.append(tmp_table)
+            style_masks.append(tmp_table)
 
     # Handle style blending weights for multiple style inputs
     style_blend_weights = []
@@ -142,33 +153,30 @@ def main():
 
     for i, layer in enumerate(list(cnn), 1):
         if next_content_idx <= len(content_layers) or next_style_idx <= len(style_layers):
-
-
             if params.content_seg != None and params.style_seg != None:
+
                 if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
-                    for k in range(len(color_codes)):
-                        h, w = color_content_masks[k].shape
+                    for k in range(num_styles):
+                        h, w = content_masks[k].shape
                         h, w = int(h/2), int(w/2)
-                        color_content_masks[k] = torch.nn.functional.interpolate(
-                            color_content_masks[k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
+                        content_masks[k] = torch.nn.functional.interpolate(
+                            content_masks[k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
                     for j in range(len(style_image_list)):
-                        for k in range(len(color_codes)):
-                            h, w = color_style_masks[j][k].shape
+                        for k in range(num_styles):
+                            h, w = style_masks[j][k].shape
                             h, w = int(h/2), int(w/2)
-                            color_style_masks[j][k] = torch.nn.functional.interpolate(
-                                color_style_masks[j][k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
-                        color_style_masks[j] = copy.deepcopy(color_style_masks[j])
+                            style_masks[j][k] = torch.nn.functional.interpolate(
+                                style_masks[j][k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
+                        style_masks[j] = copy.deepcopy(style_masks[j])
 
                 elif isinstance(layer, nn.Conv2d):
-
                     sap = nn.AvgPool2d(kernel_size=(3,3), stride=(1, 1), padding=(1,1))
-                    for k in range(len(color_codes)):
-                        color_content_masks[k] = sap(color_content_masks[k].repeat(1,1,1))[0].clone()
+                    for k in range(num_styles):
+                        content_masks[k] = sap(content_masks[k].repeat(1,1,1))[0].clone()
                     for j in range(len(style_image_list)):
-                        for k in range(len(color_codes)):
-                            color_style_masks[j][k] = sap(color_style_masks[j][k].repeat(1,1,1))[0].clone()
-                        color_style_masks[j] = copy.deepcopy(color_style_masks[j])
-
+                        for k in range(num_styles):
+                            style_masks[j][k] = sap(style_masks[j][k].repeat(1,1,1))[0].clone()
+                        style_masks[j] = copy.deepcopy(style_masks[j])
 
             if isinstance(layer, nn.Conv2d):
                 net.add_module(str(len(net)), layer)
@@ -198,9 +206,8 @@ def main():
 
                 if layerList['R'][r] in style_layers:
                     print("Setting up style layer " + str(i) + ": " + str(layerList['R'][r]))
-                    #loss_module = StyleLoss(params.style_weight)
                     if params.content_seg != None:
-                        loss_module = MaskedStyleLoss(params.style_weight, color_style_masks, color_content_masks, color_codes)
+                        loss_module = MaskedStyleLoss(params.style_weight, style_masks, content_masks)
                     else:
                         loss_module = StyleLoss(params.style_weight)
                     net.add_module(str(len(net)), loss_module)
@@ -415,22 +422,6 @@ def deprocess(output_tensor):
     return image
 
 
-# extract a mask from a colored segmentation image
-def ExtractMask(seg, color, dtype):
-    mask = None
-    if color == 'black':
-        mask = seg[0].lt(0.1)
-        mask = mask.mul(seg[1].lt(0.1))
-        mask = mask.mul(seg[2].lt(0.1))
-    elif color == 'white':
-        mask = seg[0].gt(0.9)
-        mask = mask.mul(seg[1].gt(0.9))
-        mask = mask.mul(seg[2].gt(0.9))
-    else:
-        print('ExtractMask(): color not recognized, color = ', color)
-    return mask.type(dtype)
-
-
 # Combine the Y channel of the generated image and the UV/CbCr channels of the
 # content image to perform color-independent style transfer.
 def original_colors(content, generated):
@@ -531,7 +522,7 @@ class StyleLoss(nn.Module):
 # Define an nn Module to compute style loss with segmentation mask
 class MaskedStyleLoss(nn.Module):
 
-    def __init__(self, strength, color_style_masks, color_content_masks, color_codes):
+    def __init__(self, strength, style_masks, content_masks):
         super(MaskedStyleLoss, self).__init__()
         self.target_grams = []
         self.masked_grams = []
@@ -541,21 +532,21 @@ class MaskedStyleLoss(nn.Module):
         self.crit = nn.MSELoss()
         self.mode = 'none'
         self.blend_weight = None
-        self.color_style_masks = copy.deepcopy(color_style_masks)
-        self.color_content_masks = copy.deepcopy(color_content_masks)
-        self.color_codes = color_codes
+        self.style_masks = copy.deepcopy(style_masks)
+        self.content_masks = copy.deepcopy(content_masks)
         self.capture_count = 0
+        self.num_styles = len(self.style_masks)
 
     def forward(self, input):
         if self.mode == 'capture':
-            masks = self.color_style_masks[self.capture_count]
+            masks = self.style_masks[self.capture_count]
             self.capture_count += 1
         elif self.mode == 'loss':
-            masks = self.color_content_masks
-            self.color_style_masks = None
+            masks = self.content_masks
+            self.style_masks = None
         if self.mode != 'none':
             loss = 0
-            for j in range(len(self.color_codes)):
+            for j in range(self.num_styles):
                 l_mask_ori = masks[j].clone()
                 l_mask = l_mask_ori.repeat(1,1,1).expand(input.size())
                 l_mean = l_mask_ori.mean()
@@ -576,7 +567,6 @@ class MaskedStyleLoss(nn.Module):
                     loss += self.crit(self.masked_grams[j], self.target_grams[j]) * l_mean * self.strength
             self.loss = loss
         return input
-
 
 
 class TVLoss(nn.Module):
