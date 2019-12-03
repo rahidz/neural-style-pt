@@ -4,20 +4,21 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
-
+from torch.utils.cpp_extension import load
 from PIL import Image
 from CaffeLoader import loadCaffemodel, ModelParallel
 
+cpp = torch.utils.cpp_extension.load(name="histogram_cpp", sources=["histogram.cpp", "histogram.cu"])
+
 import argparse
 parser = argparse.ArgumentParser()
-# Basic options
 
+# Basic options
 parser.add_argument("-style_image", help="Style target image", default='examples/inputs/starry_night.jpg')
 parser.add_argument("-style_seg", help="Style segmentation images", default=None)
 parser.add_argument("-style_blend_weights", default=None)
 parser.add_argument("-content_image", help="Content target image", default='examples/inputs/monalisa.jpg')
 parser.add_argument("-content_seg", help="Content segmentation image", default=None)
-parser.add_argument("-color_codes", help="Colors used in content mask (blue,green,black,white,red,yellow,grey,lightblue,purple)", default=None)
 parser.add_argument("-image_size", help="Maximum height / width of generated image", type=int, default=512)
 parser.add_argument("-gpu", help="Zero-indexed ID of the GPU to use; for CPU mode set -gpu = c", default=0)
 
@@ -56,6 +57,7 @@ params = parser.parse_args()
 
 
 Image.MAX_IMAGE_PIXELS = 1000000000 # Support gigapixel images
+style_histo_strengths = [2000000000, 500000000, 100000000, 35000000, 35000000]
 
 
 def main():
@@ -84,26 +86,47 @@ def main():
         init_image = preprocess(params.init_image, image_size).type(dtype)
 
     # setup segmentation masks
-    style_seg_images_caffe = []
-    color_content_masks, color_style_masks, color_codes = [], [], []
-    if params.content_seg != None and params.style_seg != None and params.color_codes != None:
-        color_codes = params.color_codes.split(",")
-        content_seg_caffe = preprocess(params.content_seg, params.image_size, to_normalize=False).type(dtype)
+    num_styles = len(style_image_input)
+    style_seg_images_caffe, content_seg_images_caffe = [], []
+    content_masks, style_masks = [], []
+
+    if params.content_seg != None:
+        content_seg_list = params.content_seg.split(",")
+        assert(len(content_seg_list) == len(style_image_list), \
+            "-content_seg and -style_image must have the same number of elements")
+        for image in content_seg_list:
+            content_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
+            content_seg_images_caffe.append(content_seg_caffe)
+    else:
+        image_size = (1, content_image.size(1), content_image.size(2), content_image.size(3))
+        content_seg_caffe = torch.ones(image_size).type(dtype)
+        content_seg_images_caffe.append(content_seg_caffe)
+
+    if params.style_seg == None:  
+        # no style_seg specified, so just default to white
+        for i in range(num_styles):
+            style_seg_caffe = torch.ones(style_images_caffe[i].shape).type(dtype)
+            style_seg_images_caffe.append(style_seg_caffe)
+    else:
         style_seg_list = params.style_seg.split(",")
         assert(len(style_seg_list) == len(style_image_list), \
             "-style_seg and -style_image must have the same number of elements")
         for image in style_seg_list:
             style_seg_caffe = preprocess(image, params.image_size, to_normalize=False).type(dtype)
             style_seg_images_caffe.append(style_seg_caffe)
-        for j in range(len(color_codes)):
-            content_mask_j = ExtractMask(content_seg_caffe[0], color_codes[j], dtype)
-            color_content_masks.append(content_mask_j)
-        for i in range(len(style_image_list)):
-            tmp_table = []
-            for j in range(len(color_codes)):
-                style_mask_i_j = ExtractMask(style_seg_images_caffe[i][0], color_codes[j], dtype)
-                tmp_table.append(style_mask_i_j)
-            color_style_masks.append(tmp_table)
+    for j in range(num_styles):
+        content_mask_j = content_seg_images_caffe[j][0][0].type(dtype)
+        content_masks.append(content_mask_j)
+    for i in range(num_styles):
+        tmp_table = []
+        for j in range(num_styles):
+            style_seg_image_caffe = style_seg_images_caffe[i][0][0]
+            if i == j:
+                style_mask_i_j = style_seg_image_caffe.type(dtype)
+            else:                
+                style_mask_i_j = torch.zeros(style_seg_image_caffe.shape).type(dtype)
+            tmp_table.append(style_mask_i_j)
+        style_masks.append(tmp_table)
 
     # Handle style blending weights for multiple style inputs
     style_blend_weights = []
@@ -143,32 +166,28 @@ def main():
     for i, layer in enumerate(list(cnn), 1):
         if next_content_idx <= len(content_layers) or next_style_idx <= len(style_layers):
 
-
-            if params.content_seg != None and params.style_seg != None:
-                if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
-                    for k in range(len(color_codes)):
-                        h, w = color_content_masks[k].shape
+            if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
+                for k in range(num_styles):
+                    h, w = content_masks[k].shape
+                    h, w = int(h/2), int(w/2)
+                    content_masks[k] = torch.nn.functional.interpolate(
+                        content_masks[k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
+                for j in range(len(style_image_list)):
+                    for k in range(num_styles):
+                        h, w = style_masks[j][k].shape
                         h, w = int(h/2), int(w/2)
-                        color_content_masks[k] = torch.nn.functional.interpolate(
-                            color_content_masks[k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
-                    for j in range(len(style_image_list)):
-                        for k in range(len(color_codes)):
-                            h, w = color_style_masks[j][k].shape
-                            h, w = int(h/2), int(w/2)
-                            color_style_masks[j][k] = torch.nn.functional.interpolate(
-                                color_style_masks[j][k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
-                        color_style_masks[j] = copy.deepcopy(color_style_masks[j])
+                        style_masks[j][k] = torch.nn.functional.interpolate(
+                            style_masks[j][k].repeat(1,1,1,1), mode='bilinear', size=(h, w))[0][0]
+                    style_masks[j] = copy.deepcopy(style_masks[j])
 
-                elif isinstance(layer, nn.Conv2d):
-
-                    sap = nn.AvgPool2d(kernel_size=(3,3), stride=(1, 1), padding=(1,1))
-                    for k in range(len(color_codes)):
-                        color_content_masks[k] = sap(color_content_masks[k].repeat(1,1,1))[0].clone()
-                    for j in range(len(style_image_list)):
-                        for k in range(len(color_codes)):
-                            color_style_masks[j][k] = sap(color_style_masks[j][k].repeat(1,1,1))[0].clone()
-                        color_style_masks[j] = copy.deepcopy(color_style_masks[j])
-
+            elif isinstance(layer, nn.Conv2d):
+                sap = nn.AvgPool2d(kernel_size=(3,3), stride=(1, 1), padding=(1,1))
+                for k in range(num_styles):
+                    content_masks[k] = sap(content_masks[k].repeat(1,1,1))[0].clone()
+                for j in range(len(style_image_list)):
+                    for k in range(num_styles):
+                        style_masks[j][k] = sap(style_masks[j][k].repeat(1,1,1))[0].clone()
+                    style_masks[j] = copy.deepcopy(style_masks[j])
 
             if isinstance(layer, nn.Conv2d):
                 net.add_module(str(len(net)), layer)
@@ -181,7 +200,7 @@ def main():
 
                 if layerList['C'][c] in style_layers:
                     print("Setting up style layer " + str(i) + ": " + str(layerList['C'][c]))
-                    loss_module = StyleLoss(params.style_weight)
+                    loss_module = StyleLoss(params.style_weight, style_masks, content_masks)
                     net.add_module(str(len(net)), loss_module)
                     style_losses.append(loss_module)
                 c+=1
@@ -198,11 +217,7 @@ def main():
 
                 if layerList['R'][r] in style_layers:
                     print("Setting up style layer " + str(i) + ": " + str(layerList['R'][r]))
-                    #loss_module = StyleLoss(params.style_weight)
-                    if params.content_seg != None:
-                        loss_module = MaskedStyleLoss(params.style_weight, color_style_masks, color_content_masks, color_codes)
-                    else:
-                        loss_module = StyleLoss(params.style_weight)
+                    loss_module = StyleLoss(params.style_weight, style_histo_strengths[next_style_idx-1], style_masks, content_masks)
                     net.add_module(str(len(net)), loss_module)
                     style_losses.append(loss_module)
                     next_style_idx += 1
@@ -415,22 +430,6 @@ def deprocess(output_tensor):
     return image
 
 
-# extract a mask from a colored segmentation image
-def ExtractMask(seg, color, dtype):
-    mask = None
-    if color == 'black':
-        mask = seg[0].lt(0.1)
-        mask = mask.mul(seg[1].lt(0.1))
-        mask = mask.mul(seg[2].lt(0.1))
-    elif color == 'white':
-        mask = seg[0].gt(0.9)
-        mask = mask.mul(seg[1].gt(0.9))
-        mask = mask.mul(seg[2].gt(0.9))
-    else:
-        print('ExtractMask(): color not recognized, color = ', color)
-    return mask.type(dtype)
-
-
 # Combine the Y channel of the generated image and the UV/CbCr channels of the
 # content image to perform color-independent style transfer.
 def original_colors(content, generated):
@@ -501,61 +500,54 @@ class GramMatrix(nn.Module):
         return torch.mm(x_flat, x_flat.t())
 
 
-# Define an nn Module to compute style loss
+# Define an nn Module to compute style loss with segmentation mask
 class StyleLoss(nn.Module):
 
-    def __init__(self, strength):
+    def __init__(self, strength, hist_strength, style_masks, content_masks):
         super(StyleLoss, self).__init__()
-        self.target = torch.Tensor()
-        self.strength = strength
-        self.gram = GramMatrix()
-        self.crit = nn.MSELoss()
-        self.mode = 'none'
-        self.blend_weight = None
-
-    def forward(self, input):
-        self.G = self.gram(input)
-        self.G = self.G.div(input.nelement())
-        if self.mode == 'capture':
-            if self.blend_weight == None:
-                self.target = self.G.detach()
-            elif self.target.nelement() == 0:
-                self.target = self.G.detach().mul(self.blend_weight)
-            else:
-                self.target = self.target.add(self.blend_weight, self.G.detach())
-        elif self.mode == 'loss':
-            self.loss = self.strength * self.crit(self.G, self.target)
-        return input
-
-
-# Define an nn Module to compute style loss with segmentation mask
-class MaskedStyleLoss(nn.Module):
-
-    def __init__(self, strength, color_style_masks, color_content_masks, color_codes):
-        super(MaskedStyleLoss, self).__init__()
         self.target_grams = []
         self.masked_grams = []
         self.masked_features = []
+        self.hist = []
+        self.hist_min_feat = []
+        self.hist_max_feat = []
+        self.hist_strength = hist_strength
         self.strength = strength
         self.gram = GramMatrix()
         self.crit = nn.MSELoss()
         self.mode = 'none'
         self.blend_weight = None
-        self.color_style_masks = copy.deepcopy(color_style_masks)
-        self.color_content_masks = copy.deepcopy(color_content_masks)
-        self.color_codes = color_codes
+        self.style_masks = copy.deepcopy(style_masks)
+        self.content_masks = copy.deepcopy(content_masks)
         self.capture_count = 0
+        self.num_styles = len(self.style_masks)
+
+    # adapted from https://github.com/pierre-wilmot/NeuralTextureSynthesis
+    def histogramTarget(self, t, h, minv, maxv):
+        assert(len(t.shape) == 3)
+        assert(len(minv.shape) == 1)
+        assert(len(maxv.shape) == 1)
+        assert(h.shape[0] == t.shape[0])
+        assert(minv.shape[0] == t.shape[0])
+        assert(maxv.shape[0] == t.shape[0])
+        assert(h.shape[1] == 256)
+        res = t.data.clone() # Clone, we don't want to change the values of features map or target histogram
+        cpp.matchHistogram(res, h.clone())
+        for c in range(res.size(0)):
+            res[c].mul_(maxv[c] - minv[c]) # Values in range [0, max - min]
+            res[c].add_(minv[c])           # Values in range [min, max]            
+        return res.data.unsqueeze(0)
 
     def forward(self, input):
         if self.mode == 'capture':
-            masks = self.color_style_masks[self.capture_count]
+            masks = self.style_masks[self.capture_count]
             self.capture_count += 1
         elif self.mode == 'loss':
-            masks = self.color_content_masks
-            self.color_style_masks = None
+            masks = self.content_masks
+            self.style_masks = None
         if self.mode != 'none':
             loss = 0
-            for j in range(len(self.color_codes)):
+            for j in range(self.num_styles):
                 l_mask_ori = masks[j].clone()
                 l_mask = l_mask_ori.repeat(1,1,1).expand(input.size())
                 l_mean = l_mask_ori.mean()
@@ -563,20 +555,31 @@ class MaskedStyleLoss(nn.Module):
                 masked_gram = self.gram(masked_feature).clone()
                 if l_mean > 0:
                     masked_gram = masked_gram.div(input.nelement() * l_mean)
+                min_feat = torch.min(masked_feature[0].view(masked_feature.shape[1], -1), 1)[0].data.clone()
+                max_feat = torch.max(masked_feature[0].view(masked_feature.shape[1], -1), 1)[0].data.clone()
+                hist = cpp.computeHistogram(masked_feature[0], 256)
                 if self.mode == 'capture':
                     if j >= len(self.target_grams):
                         self.target_grams.append(masked_gram.detach().mul(self.blend_weight))
                         self.masked_grams.append(self.target_grams[j].clone())
                         self.masked_features.append(masked_feature)
+                        self.hist.append(hist)
+                        self.hist_min_feat.append(min_feat)
+                        self.hist_max_feat.append(max_feat)
                     else:
                         self.target_grams[j] += masked_gram.detach().mul(self.blend_weight)
+                        self.hist_min_feat[j] = torch.min(self.hist_min_feat[j], min_feat)
+                        self.hist_max_feat[j] = torch.max(self.hist_max_feat[j], max_feat)
+                        self.hist[j] += hist
                 elif self.mode == 'loss':
                     self.masked_grams[j] = masked_gram
                     self.masked_features[j] = masked_feature
-                    loss += self.crit(self.masked_grams[j], self.target_grams[j]) * l_mean * self.strength
+                    #loss += self.crit(self.masked_grams[j], self.target_grams[j]) * l_mean * self.strength
+                    histTarget = self.histogramTarget(self.masked_features[j][0], self.hist[j], self.hist_min_feat[j], self.hist_max_feat[j])
+                    assert(histTarget.shape == self.masked_features[j].shape)
+                    loss += torch.nn.functional.mse_loss(self.masked_features[j], histTarget) * self.hist_strength * 0.01            
             self.loss = loss
         return input
-
 
 
 class TVLoss(nn.Module):
