@@ -8,8 +8,6 @@ from torch.utils.cpp_extension import load
 from PIL import Image
 from CaffeLoader import loadCaffemodel, ModelParallel
 
-cpp = torch.utils.cpp_extension.load(name="histogram_cpp", sources=["histogram.cpp", "histogram.cu"])
-
 import argparse
 parser = argparse.ArgumentParser()
 
@@ -26,7 +24,9 @@ parser.add_argument("-gpu", help="Zero-indexed ID of the GPU to use; for CPU mod
 parser.add_argument("-content_weight", type=float, default=5e0)
 parser.add_argument("-style_weight", type=float, default=1e2)
 parser.add_argument("-normalize_weights", action='store_true')
+parser.add_argument("-hist_weight", type=float, default=1e2)
 parser.add_argument("-tv_weight", type=float, default=1e-3)
+parser.add_argument("-style_stat", choices=['gram', 'covariance'], default='gram')
 parser.add_argument("-num_iterations", type=int, default=1000)
 parser.add_argument("-init", choices=['random', 'image'], default='random')
 parser.add_argument("-init_image", default=None)
@@ -51,13 +51,16 @@ parser.add_argument("-seed", type=int, default=-1)
 
 parser.add_argument("-content_layers", help="layers for content", default='relu4_2')
 parser.add_argument("-style_layers", help="layers for style", default='relu1_1,relu2_1,relu3_1,relu4_1,relu5_1')
+parser.add_argument("-hist_layers", help="layers for histogram", default='relu2_1,relu3_1,relu4_1,relu5_1')
 
 parser.add_argument("-multidevice_strategy", default='4,7,29')
 params = parser.parse_args()
 
-
-Image.MAX_IMAGE_PIXELS = 1000000000 # Support gigapixel images
-style_histo_strengths = [2000000000, 500000000, 100000000, 35000000, 35000000]
+# Support gigapixel images
+Image.MAX_IMAGE_PIXELS = 1000000000 
+# Import histogram c++ code if needed
+if params.hist_layers != '' and params.hist_weight > 0:
+    cpp = torch.utils.cpp_extension.load(name="histogram_cpp", sources=["histogram.cpp", "histogram.cu"])
 
 
 def main():
@@ -151,11 +154,12 @@ def main():
 
     content_layers = params.content_layers.split(',')
     style_layers = params.style_layers.split(',')
+    hist_layers = params.hist_layers.split(',')
 
     # Set up the network, inserting style and content loss modules
     cnn = copy.deepcopy(cnn)
-    content_losses, style_losses, tv_losses = [], [], []
-    next_content_idx, next_style_idx = 1, 1
+    content_losses, style_losses, hist_losses, tv_losses = [], [], [], []
+    next_content_idx, next_style_idx, next_hist_idx = 1, 1, 1
     net = nn.Sequential()
     c, r = 0, 0
     if params.tv_weight > 0:
@@ -164,7 +168,7 @@ def main():
         tv_losses.append(tv_mod)
 
     for i, layer in enumerate(list(cnn), 1):
-        if next_content_idx <= len(content_layers) or next_style_idx <= len(style_layers):
+        if next_content_idx <= len(content_layers) or next_style_idx <= len(style_layers) or next_hist_idx <= len(hist_layers):
 
             if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
                 for k in range(num_styles):
@@ -192,35 +196,44 @@ def main():
             if isinstance(layer, nn.Conv2d):
                 net.add_module(str(len(net)), layer)
 
-                if layerList['C'][c] in content_layers:
+                if layerList['C'][c] in content_layers and params.content_weight > 0:
                     print("Setting up content layer " + str(i) + ": " + str(layerList['C'][c]))
                     loss_module = ContentLoss(params.content_weight)
                     net.add_module(str(len(net)), loss_module)
                     content_losses.append(loss_module)
 
-                if layerList['C'][c] in style_layers:
+                if layerList['C'][c] in style_layers and params.style_weight > 0:
                     print("Setting up style layer " + str(i) + ": " + str(layerList['C'][c]))
-                    loss_module = StyleLoss(params.style_weight, style_masks, content_masks)
+                    loss_module = StyleLoss(params.style_weight, params.style_stat, style_masks, content_masks)
                     net.add_module(str(len(net)), loss_module)
                     style_losses.append(loss_module)
+                
                 c+=1
 
             if isinstance(layer, nn.ReLU):
                 net.add_module(str(len(net)), layer)
 
-                if layerList['R'][r] in content_layers:
+                if layerList['R'][r] in content_layers and params.content_weight > 0:
                     print("Setting up content layer " + str(i) + ": " + str(layerList['R'][r]))
                     loss_module = ContentLoss(params.content_weight)
                     net.add_module(str(len(net)), loss_module)
                     content_losses.append(loss_module)
                     next_content_idx += 1
 
-                if layerList['R'][r] in style_layers:
+                if layerList['R'][r] in style_layers and params.style_weight > 0:
                     print("Setting up style layer " + str(i) + ": " + str(layerList['R'][r]))
-                    loss_module = StyleLoss(params.style_weight, style_histo_strengths[next_style_idx-1], style_masks, content_masks)
+                    loss_module = StyleLoss(params.style_weight, params.style_stat, style_masks, content_masks)
                     net.add_module(str(len(net)), loss_module)
                     style_losses.append(loss_module)
                     next_style_idx += 1
+
+                if layerList['R'][r] in hist_layers and params.hist_weight > 0:
+                    print("Setting up histogram layer " + str(i) + ": " + str(layerList['R'][r]))
+                    loss_module = HistLoss(params.hist_weight, style_masks, content_masks)
+                    net.add_module(str(len(net)), loss_module)
+                    hist_losses.append(loss_module)
+                    next_hist_idx += 1
+
                 r+=1
 
             if isinstance(layer, nn.MaxPool2d) or isinstance(layer, nn.AvgPool2d):
@@ -247,12 +260,25 @@ def main():
             j.blend_weight = style_blend_weights[i]
         net(style_images_caffe[i])
 
+    # Capture histogram targets
+    for i in style_losses:
+        i.mode = 'none'
+
+    for i, image in enumerate(style_images_caffe):
+        print("Capturing histogram target " + str(i+1))
+        for j in hist_losses:
+            j.mode = 'capture'
+            j.blend_weight = style_blend_weights[i]
+        net(style_images_caffe[i])
+
     # Set all loss modules to loss mode
     for i in content_losses:
         i.mode = 'loss'
     for i in style_losses:
         i.mode = 'loss'
-
+    for i in hist_losses:
+        i.mode = 'loss'
+    
     # Maybe normalize content and style weights
     if params.normalize_weights:
         normalize_weights(content_losses, style_losses)
@@ -284,6 +310,8 @@ def main():
                 print("  Content " + str(i+1) + " loss: " + str(loss_module.loss.item()))
             for i, loss_module in enumerate(style_losses):
                 print("  Style " + str(i+1) + " loss: " + str(loss_module.loss.item()))
+            for i, loss_module in enumerate(hist_losses):
+                print("  Histogram " + str(i+1) + " loss: " + str(loss_module.loss.item()))
             print("  Total loss: " + str(loss.item()))
 
     def maybe_save(t):
@@ -318,6 +346,8 @@ def main():
         for mod in content_losses:
             loss += mod.loss.to(backward_device)
         for mod in style_losses:
+            loss += mod.loss.to(backward_device)
+        for mod in hist_losses:
             loss += mod.loss.to(backward_device)
         if params.tv_weight > 0:
             for mod in tv_losses:
@@ -500,43 +530,35 @@ class GramMatrix(nn.Module):
         return torch.mm(x_flat, x_flat.t())
 
 
+class CovarianceMatrix(nn.Module):
+
+    def forward(self, input):
+        _, C, H, W = input.size()
+        x_flat = input.view(C, H * W)
+        x_flat = x_flat - x_flat.mean(1).unsqueeze(1)
+        return torch.mm(x_flat, x_flat.t())
+
+
 # Define an nn Module to compute style loss with segmentation mask
 class StyleLoss(nn.Module):
 
-    def __init__(self, strength, hist_strength, style_masks, content_masks):
+    def __init__(self, strength, style_stat, style_masks, content_masks):
         super(StyleLoss, self).__init__()
         self.target_grams = []
         self.masked_grams = []
         self.masked_features = []
-        self.hist = []
-        self.hist_min_feat = []
-        self.hist_max_feat = []
-        self.hist_strength = hist_strength
         self.strength = strength
-        self.gram = GramMatrix()
+        if style_stat == 'gram':
+            self.gram = GramMatrix()
+        elif style_stat == 'covariance':
+            self.gram = CovarianceMatrix()
         self.crit = nn.MSELoss()
         self.mode = 'none'
-        self.blend_weight = None
+        self.blend_weight = 1.0
         self.style_masks = copy.deepcopy(style_masks)
         self.content_masks = copy.deepcopy(content_masks)
         self.capture_count = 0
         self.num_styles = len(self.style_masks)
-
-    # adapted from https://github.com/pierre-wilmot/NeuralTextureSynthesis
-    def histogramTarget(self, t, h, minv, maxv):
-        assert(len(t.shape) == 3)
-        assert(len(minv.shape) == 1)
-        assert(len(maxv.shape) == 1)
-        assert(h.shape[0] == t.shape[0])
-        assert(minv.shape[0] == t.shape[0])
-        assert(maxv.shape[0] == t.shape[0])
-        assert(h.shape[1] == 256)
-        res = t.data.clone() # Clone, we don't want to change the values of features map or target histogram
-        cpp.matchHistogram(res, h.clone())
-        for c in range(res.size(0)):
-            res[c].mul_(maxv[c] - minv[c]) # Values in range [0, max - min]
-            res[c].add_(minv[c])           # Values in range [min, max]            
-        return res.data.unsqueeze(0)
 
     def forward(self, input):
         if self.mode == 'capture':
@@ -555,31 +577,81 @@ class StyleLoss(nn.Module):
                 masked_gram = self.gram(masked_feature).clone()
                 if l_mean > 0:
                     masked_gram = masked_gram.div(input.nelement() * l_mean)
-                min_feat = torch.min(masked_feature[0].view(masked_feature.shape[1], -1), 1)[0].data.clone()
-                max_feat = torch.max(masked_feature[0].view(masked_feature.shape[1], -1), 1)[0].data.clone()
-                hist = cpp.computeHistogram(masked_feature[0], 256)
                 if self.mode == 'capture':
                     if j >= len(self.target_grams):
                         self.target_grams.append(masked_gram.detach().mul(self.blend_weight))
                         self.masked_grams.append(self.target_grams[j].clone())
                         self.masked_features.append(masked_feature)
-                        self.hist.append(hist)
-                        self.hist_min_feat.append(min_feat)
-                        self.hist_max_feat.append(max_feat)
                     else:
                         self.target_grams[j] += masked_gram.detach().mul(self.blend_weight)
-                        self.hist_min_feat[j] = torch.min(self.hist_min_feat[j], min_feat)
-                        self.hist_max_feat[j] = torch.max(self.hist_max_feat[j], max_feat)
-                        self.hist[j] += hist
                 elif self.mode == 'loss':
                     self.masked_grams[j] = masked_gram
                     self.masked_features[j] = masked_feature
-                    #loss += self.crit(self.masked_grams[j], self.target_grams[j]) * l_mean * self.strength
-                    histTarget = self.histogramTarget(self.masked_features[j][0], self.hist[j], self.hist_min_feat[j], self.hist_max_feat[j])
-                    assert(histTarget.shape == self.masked_features[j].shape)
-                    loss += torch.nn.functional.mse_loss(self.masked_features[j], histTarget) * self.hist_strength * 0.01            
+                    loss += self.crit(self.masked_grams[j], self.target_grams[j]) * l_mean * self.strength
             self.loss = loss
         return input
+
+
+
+# Define an nn Module to compute histogram loss
+class HistLoss(nn.Module):
+
+    def __init__(self, strength, style_masks, content_masks):
+        super(HistLoss, self).__init__()
+        self.target_hists = []
+        self.target_maxs = []
+        self.target_mins = []
+        self.strength = strength
+        self.crit = nn.MSELoss()
+        self.mode = 'none'
+        self.blend_weight = 1.0
+        self.style_masks = copy.deepcopy(style_masks)
+        self.content_masks = copy.deepcopy(content_masks)
+        self.capture_count = 0
+        self.num_styles = len(self.style_masks)
+
+    def minmax(self, input):
+        return torch.min(input[0].view(input.shape[1], -1), 1)[0].data.clone(), \
+        torch.max(input[0].view(input.shape[1], -1), 1)[0].data.clone()
+		
+    def calcHist(self, input, target, min_val, max_val):
+        res = input.data.clone() 
+        cpp.matchHistogram(res, target.clone())
+        for c in range(res.size(0)):
+            res[c].mul_(max_val[c] - min_val[c]) 
+            res[c].add_(min_val[c])                      
+        return res.data.unsqueeze(0)
+		
+    def forward(self, input):
+        if self.mode == 'capture':
+            masks = self.style_masks[self.capture_count]
+            self.capture_count += 1
+        elif self.mode == 'loss':
+            masks = self.content_masks
+            self.style_masks = None
+        if self.mode != 'none':            
+            loss = 0
+            for j in range(self.num_styles):
+                l_mask_ori = masks[j].clone()
+                l_mask = l_mask_ori.repeat(1,1,1).expand(input.size())
+                masked_feature = l_mask.mul(input)
+                target_min, target_max = self.minmax(masked_feature)
+                target_hist = cpp.computeHistogram(masked_feature[0], 256)
+                if self.mode == 'capture':		
+                    if j >= len(self.target_hists):
+                        self.target_mins.append(target_min)
+                        self.target_maxs.append(target_max)
+                        self.target_hists.append(target_hist.mul(self.blend_weight))
+                    else:
+                        self.target_hists[j] += target_hist.mul(self.blend_weight)
+                        self.target_mins[j] = torch.min(self.target_mins[j], target_min)
+                        self.target_maxs[j] = torch.max(self.target_maxs[j], target_max)
+                elif self.mode == 'loss':
+                    target = self.calcHist(masked_feature[0], self.target_hists[j], self.target_mins[j], self.target_maxs[j])
+                    loss += 0.01 * self.strength * self.crit(masked_feature, target)
+            self.loss = loss
+        return input
+
 
 
 class TVLoss(nn.Module):
