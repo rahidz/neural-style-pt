@@ -258,14 +258,6 @@ def main():
         for j in style_losses:
             j.mode = 'capture'
             j.blend_weight = style_blend_weights[i]
-        net(style_images_caffe[i])
-
-    # Capture histogram targets
-    for i in style_losses:
-        i.mode = 'none'
-
-    for i, image in enumerate(style_images_caffe):
-        print("Capturing histogram target " + str(i+1))
         for j in hist_losses:
             j.mode = 'capture'
             j.blend_weight = style_blend_weights[i]
