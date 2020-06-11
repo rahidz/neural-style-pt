@@ -23,7 +23,7 @@ sw=str(STYLE_WEIGHT)
 scale=str(STYLE_SCALE)
 oc=str(ORIGINAL_COLORS)
 
-OUT_DIR=content+"_"+style+"_"+cw+"_"+sw+"_"+scale+"_"+oc
+OUT_DIR="MyDrive/neuralstyle/"+content+"_"+style+"_"+cw+"_"+sw+"_"+scale+"_"+oc
 os.makedirs(OUT_DIR, exist_ok=True)
 
 if ',' in STYLE_IMAGE:
