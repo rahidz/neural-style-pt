@@ -107,3 +107,11 @@ PREV=OUT_DIR+"/X7.png"
 if colorTransfer == True:
     os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX7.png")
     PREV=OUT_DIR+"/histstyleX7.png"
+	
+os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 100 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 4000 -model_file models/nin_imagenet.pth -content_layers relu0,relu1 -style_layers relu0,relu1 -output_image " + OUT_DIR +"/X8.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
+
+PREV=OUT_DIR+"/X8.png"
+
+if colorTransfer == True:
+    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX8.png")
+    PREV=OUT_DIR+"/histstyleX8.png"
