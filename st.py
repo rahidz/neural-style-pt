@@ -13,8 +13,6 @@ style=Path(STYLE_IMAGE).stem
 OUT_DIR="MyDrive/strotss/"+content+style
 os.makedirs(OUT_DIR, exist_ok=True)
 
-os.system("python3 strotss.py --weight 0.50 --resize_to 1024 --output " + OUT_DIR + "/out50.png " + CONTENT_IMAGE + " " + STYLE_IMAGE)
-
 os.system("python3 strotss.py --weight 0.75 --resize_to 1024 --output " + OUT_DIR + "/out75.png " + CONTENT_IMAGE + " " + STYLE_IMAGE)
 
 os.system("python3 strotss.py --weight 0.85 --resize_to 1024 --output " + OUT_DIR + "/out85.png " + CONTENT_IMAGE + " " + STYLE_IMAGE)
