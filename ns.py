@@ -52,8 +52,8 @@ os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_i
 
 PREV=OUT_DIR+"/X2.png"
 
-STYLE_WEIGHT=int(STYLE_WEIGHT)/10
-CONTENT_WEIGHT=int(CONTENT_WEIGHT)/5
+STYLE_WEIGHT=int(float(STYLE_WEIGHT))/10
+CONTENT_WEIGHT=int(float(CONTENT_WEIGHT))/5
 
 STYLE_WEIGHT=str(STYLE_WEIGHT)
 CONTENT_WEIGHT=str(CONTENT_WEIGHT)
@@ -113,5 +113,5 @@ os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_i
 PREV=OUT_DIR+"/X8.png"
 
 if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX8.png")
+    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/" + content+"_"+style+"_"+"histstyleX8.png")
     PREV=OUT_DIR+"/histstyleX8.png"
