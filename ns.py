@@ -23,14 +23,21 @@ sw=str(STYLE_WEIGHT)
 scale=str(STYLE_SCALE)
 oc=str(ORIGINAL_COLORS)
 
-OUT_DIR="MyDrive/neuralstyle/"+content+"_"+style+"_"+cw+"_"+sw+"_"+scale+"_"+oc
-os.makedirs(OUT_DIR, exist_ok=True)
-
 if ',' in STYLE_IMAGE:
     multipleimages=True
 	
 if ORIGINAL_COLORS == "0" and multipleimages == False:
-	colorTransfer=True
+	colorTransfer=True	
+
+if multipleimages == False:
+	OUT_DIR="MyDrive/neuralstyle/"+content+"_"+style+"_"+cw+"_"+sw+"_"+scale+"_"+oc
+else:
+	style=os.path.splitext(STYLE_IMAGE)
+	stylelist=style[0].split(",")
+	laststyle=str(stylelist[-1])
+	OUT_DIR="MyDrive/neuralstyle/"+content+"_"+laststyle+"_"+cw+"_"+sw+"_"+scale+"_"+oc
+			
+os.makedirs(OUT_DIR, exist_ok=True)
 
 os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -style_scale " + STYLE_SCALE + " -print_iter 1000 -save_iter 0 -num_iterations 1000 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 256 -content_layers relu1_1,relu2_1,relu3_1,relu4_1,relu5_1 -style_layers relu1_1,relu2_1,relu3_1,relu4_1,relu5_1 -output_image " + OUT_DIR +"/X0.png -tv_weight 0.00001 -gpu 0 -model_file MyDrive/models/vgg19-d01eb7cb.pth -backend cudnn -cudnn_autotune")
 
