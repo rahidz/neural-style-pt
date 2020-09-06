@@ -69,56 +69,10 @@ if colorTransfer == True:
     os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX2.png")
     PREV=OUT_DIR+"/histstyleX2.png"
 
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 600 -save_iter 0 -num_iterations 600 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 1800 -model_file MyDrive/models/nyud-fcn32s-color-heavy.pth -output_image " + OUT_DIR +"/X3.png -tv_weight 0.00001 -gpu 0 -backend cudnn")
+os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 1200 -save_iter 0 -num_iterations 1200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 1800 -model_file MyDrive/models/nyud-fcn32s-color-heavy.pth -output_image " + OUT_DIR +"/X3.png -tv_weight 0.00001 -gpu 0 -backend cudnn")
 
 PREV=OUT_DIR+"/X3.png"
 
-STYLE_WEIGHT="1000"
-CONTENT_WEIGHT="0"
-
-STYLE_WEIGHT=str(STYLE_WEIGHT)
-CONTENT_WEIGHT=str(CONTENT_WEIGHT)
-
 if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX3.png")
+    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/" + content+"_"+style+"_"+"histstyleX3.png")
     PREV=OUT_DIR+"/histstyleX3.png"
-
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 200 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 2100 -model_file MyDrive/models/channel_pruning.pth -content_layers relu1_1,relu2_1,relu3_1,relu4_1,relu5_1 -style_layers relu1_1,relu2_1,relu3_1,relu4_1,relu5_1 -output_image " + OUT_DIR +"/X4.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
-
-PREV=OUT_DIR+"/X4.png"
-
-if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX4.png")
-    PREV=OUT_DIR+"/histstyleX4.png"
-
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 200 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 2400 -model_file MyDrive/models/nin_imagenet.pth -content_layers relu0,relu1,relu2,relu3,relu5,relu6,relu7,relu8 -style_layers relu0,relu1,relu2,relu3,relu5,relu6,relu7,relu8 -output_image " + OUT_DIR +"/X5.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
-
-PREV=OUT_DIR+"/X5.png"
-
-if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX5.png")
-    PREV=OUT_DIR+"/histstyleX5.png"
-
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 200 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 2700 -model_file MyDrive/models/nin_imagenet.pth -content_layers relu0,relu1,relu2,relu3,relu5,relu6 -style_layers relu0,relu1,relu2,relu3,relu5,relu6 -output_image " + OUT_DIR +"/X6.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
-
-PREV=OUT_DIR+"/X6.png"
-
-if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX6.png")
-    PREV=OUT_DIR+"/histstyleX6.png"
-
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 200 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 3400 -model_file MyDrive/models/nin_imagenet.pth -content_layers relu0,relu1,relu2,relu3,relu5,relu6,relu7,relu8 -style_layers relu0,relu1,relu2,relu3,relu5,relu6,relu7,relu8 -output_image " + OUT_DIR +"/X7.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
-
-PREV=OUT_DIR+"/X7.png"
-
-if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/histstyleX7.png")
-    PREV=OUT_DIR+"/histstyleX7.png"
-	
-os.system("python3 neural_style.py -content_image " + CONTENT_IMAGE + " -style_image " + STYLE_IMAGE + " -init image -init_image " + PREV + " -style_scale " + STYLE_SCALE + " -print_iter 200 -save_iter 0 -num_iterations 200 -content_weight " + CONTENT_WEIGHT + " -style_weight " + STYLE_WEIGHT + " -image_size 4000 -model_file MyDrive/models/nin_imagenet.pth -content_layers relu0,relu1 -style_layers relu0,relu1 -output_image " + OUT_DIR +"/X8.png -tv_weight 0 -gpu 0 -backend cudnn -optimizer adam")
-
-PREV=OUT_DIR+"/X8.png"
-
-if colorTransfer == True:
-    os.system("python3 linear-color-transfer.py --target_image " + PREV + " --source_image " + STYLE_IMAGE + " --mode chol --output_image " + OUT_DIR + "/" + content+"_"+style+"_"+"histstyleX8.png")
-    PREV=OUT_DIR+"/histstyleX8.png"
